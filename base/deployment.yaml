@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  labels:
+    app.kubernetes.io/name: vllm
+spec:
+  # KEDA owns replicas after the first apply. Leave this alone.
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # GPUs are scarce. Don't ask for an extra one during a rollout
+      # unless you know the node pool has room for it.
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vllm
+    spec:
+      terminationGracePeriodSeconds: 120   # let in-flight generations finish
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.8.5   # pin to a version you've actually tested
+          args:
+            - --model=$(MODEL_ID)
+            - --served-model-name=$(SERVED_MODEL_NAME)
+            - --max-model-len=8192
+            - --gpu-memory-utilization=0.90
+            - --port=8000
+          env:
+            - name: MODEL_ID
+              value: Qwen/Qwen2.5-7B-Instruct
+            - name: SERVED_MODEL_NAME
+              value: qwen2.5-7b
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true          # only needed for gated models
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: "4"
+              memory: 24Gi
+              nvidia.com/gpu: 1
+            limits:
+              memory: 24Gi
+              nvidia.com/gpu: 1
+          # Weight download + load can take minutes. Startup probe covers
+          # that so the liveness probe doesn't kill a pod that's still loading.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 90           # up to 15 min
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 4
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        # default /dev/shm is 64Mi, which breaks tensor parallel and
+        # some CUDA graph setups
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: hf-cache
+          emptyDir:
+            sizeLimit: 60Gi

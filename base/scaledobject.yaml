@@ -1,0 +1,39 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm
+spec:
+  scaleTargetRef:
+    name: vllm
+  minReplicaCount: 1          # keep one warm. cold start is minutes, not seconds
+  maxReplicaCount: 8
+  pollingInterval: 15
+  # If Prometheus is down, don't scale blind. Hold a safe replica count.
+  fallback:
+    failureThreshold: 3
+    replicas: 2
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Pods
+              value: 2              # at most 2 new GPUs per minute
+              periodSeconds: 60
+        scaleDown:
+          # Slow on purpose. Killing a replica the moment the queue drains
+          # means paying the full cold start again on the next burst.
+          stabilizationWindowSeconds: 600
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 300
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090   # patched per overlay
+        # requests queued but not yet scheduled on the GPU.
+        # model_name comes from --served-model-name.
+        query: sum(vllm:num_requests_waiting{model_name="qwen2.5-7b"})
+        threshold: "4"              # ~1 replica per 4 waiting. tune against your TTFT target

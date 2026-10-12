@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm
+spec:
+  # Node upgrades take out at most one replica at a time.
+  # Heads up: with a single replica this still allows the eviction, so the
+  # model is briefly down during a drain. If that's not ok, run min 2.
+  # (minAvailable: 1 with one replica would just block drains forever.)
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vllm

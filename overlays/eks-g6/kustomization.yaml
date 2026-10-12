@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: llm
+resources:
+  - ../../base
+components:
+  - ../../components/servicemonitor
+patches:
+  # g6 = L4 on AWS. swap for whatever your GPU node group uses.
+  - target:
+      kind: Deployment
+      name: vllm
+    patch: |-
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          node.kubernetes.io/instance-type: g6.2xlarge
+  - target:
+      kind: ScaledObject
+      name: vllm
+    patch: |-
+      - op: replace
+        path: /spec/triggers/0/metadata/serverAddress
+        value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
